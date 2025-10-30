@@ -10,7 +10,7 @@ const supabase = createClient(
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-requested-with',
 };
 
 module.exports = async (req, res) => {
@@ -38,6 +38,8 @@ module.exports = async (req, res) => {
       return await handleGetPendingPrompts(req, res);
     } else if (req.method === 'POST' && path === '/api/prompts') {
       return await handleCreatePrompt(req, res);
+    } else if (req.method === 'POST' && path === '/api/upload') {
+      return await handleFileUpload(req, res);
     } else if (req.method === 'PUT' && path.startsWith('/api/prompts/')) {
       return await handleUpdatePrompt(req, res);
     } else if (req.method === 'DELETE' && path.startsWith('/api/prompts/')) {
@@ -208,6 +210,54 @@ async function handleLogin(req, res) {
   });
 }
 
+async function handleFileUpload(req, res) {
+  try {
+    const user = authenticateToken(req);
+    
+    const body = await parseBody(req);
+    const { file: base64File, filename, filetype } = body;
+    
+    if (!base64File || !filename) {
+      return res.status(400).json({ error: 'File data required' });
+    }
+    
+    // Remove data URL prefix if present
+    const base64Data = base64File.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    
+    // Generate unique filename
+    const fileExt = filename.split('.').pop();
+    const uniqueFilename = `${user.username}_${Date.now()}.${fileExt}`;
+    
+    // Upload to Supabase Storage
+    const { data, error } = await supabase.storage
+      .from('prompt-images')
+      .upload(uniqueFilename, buffer, {
+        contentType: filetype || 'image/jpeg',
+        upsert: false
+      });
+    
+    if (error) {
+      console.error('Upload error:', error);
+      return res.status(500).json({ error: 'Failed to upload file' });
+    }
+    
+    // Get public URL
+    const { data: { publicUrl } } = supabase.storage
+      .from('prompt-images')
+      .getPublicUrl(uniqueFilename);
+    
+    return res.json({
+      url: publicUrl,
+      filename: uniqueFilename,
+      message: 'File uploaded successfully'
+    });
+    
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+}
+
 async function handleGetPrompts(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const publicOnly = url.searchParams.get('public') !== 'false';
@@ -270,7 +320,7 @@ async function handleCreatePrompt(req, res) {
       text,
       image_url: image_url || null,
       accepted: user.role === 'admin',
-      "isTrending": false,  // Fixed: added quotes
+      "isTrending": false,
       created_at: new Date().toISOString()
     };
     
@@ -363,7 +413,7 @@ async function handleAdminStats(req, res) {
     const totalPrompts = prompts?.length || 0;
     const acceptedPrompts = prompts?.filter(p => p.accepted)?.length || 0;
     const pendingPrompts = prompts?.filter(p => !p.accepted)?.length || 0;
-    const trendingPrompts = prompts?.filter(p => p["isTrending"] && p.accepted)?.length || 0; // Fixed
+    const trendingPrompts = prompts?.filter(p => p["isTrending"] && p.accepted)?.length || 0;
     const totalUsers = new Set(prompts?.map(p => p.username) || []).size;
     
     return res.json({
@@ -386,7 +436,7 @@ async function handlePublicStats(req, res) {
   
   const acceptedPrompts = prompts || [];
   const uniqueUsers = new Set(acceptedPrompts.map(p => p.username));
-  const trendingPrompts = acceptedPrompts.filter(p => p["isTrending"]); // Fixed
+  const trendingPrompts = acceptedPrompts.filter(p => p["isTrending"]);
   
   return res.json({
     total_prompts: acceptedPrompts.length,
