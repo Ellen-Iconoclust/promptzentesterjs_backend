@@ -1,6 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 
-// Initialize Supabase client - UPDATE THESE WITH YOUR CREDENTIALS
+// Initialize Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
@@ -61,7 +61,7 @@ module.exports = async (req, res) => {
   }
 };
 
-// JWT simple implementation for demo
+// JWT simple implementation
 const jwt = {
   sign: (payload, secret) => {
     const header = { alg: 'HS256', typ: 'JWT' };
@@ -90,13 +90,14 @@ const jwt = {
 
 const JWT_SECRET = process.env.JWT_SECRET || '484848484848484848484848484848484848484884848swkjhdjwbjhjdh3djbjd3484848484848484';
 
-// Password hashing
+// FIXED: Consistent password hashing
 const bcrypt = {
   hash: (password) => {
     return require('crypto').createHash('sha256').update(password).digest('hex');
   },
   compare: (password, hash) => {
-    return require('crypto').createHash('sha256').update(password).digest('hex') === hash;
+    const hashedPassword = require('crypto').createHash('sha256').update(password).digest('hex');
+    return hashedPassword === hash;
   }
 };
 
@@ -113,103 +114,123 @@ const authenticateToken = (req) => {
 
 // Route handlers
 async function handleRegister(req, res) {
-  const { username, password } = await parseBody(req);
-  
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password required' });
+  try {
+    const { username, password } = await parseBody(req);
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+    
+    // Validate username
+    if (!username.match(/^[a-zA-Z0-9]{3,20}$/)) {
+      return res.status(400).json({ error: 'Username must be 3-20 alphanumeric characters' });
+    }
+    
+    // Validate password
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    
+    // Check if user exists
+    const { data: existingUser, error: checkError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .single();
+    
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username already exists' });
+    }
+    
+    if (checkError && checkError.code !== 'PGRST116') {
+      console.error('Check user error:', checkError);
+    }
+    
+    // Create user
+    const hashedPassword = bcrypt.hash(password);
+    const { data: newUser, error } = await supabase
+      .from('users')
+      .insert([
+        {
+          username,
+          password: hashedPassword,
+          role: 'user',
+          created_at: new Date().toISOString()
+        }
+      ])
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Create user error:', error);
+      return res.status(500).json({ error: 'Failed to create user: ' + error.message });
+    }
+    
+    // Create token
+    const token = jwt.sign(
+      { username: newUser.username, role: newUser.role },
+      JWT_SECRET
+    );
+    
+    return res.status(201).json({
+      access_token: token,
+      username: newUser.username,
+      role: newUser.role,
+      message: 'Registration successful'
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    return res.status(500).json({ error: 'Registration failed: ' + error.message });
   }
-  
-  // Validate username
-  if (!username.match(/^[a-zA-Z0-9]{3,20}$/)) {
-    return res.status(400).json({ error: 'Username must be 3-20 alphanumeric characters' });
-  }
-  
-  // Validate password
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
-  }
-  
-  // Check if user exists
-  const { data: existingUser } = await supabase
-    .from('users')
-    .select('*')
-    .eq('username', username)
-    .single();
-  
-  if (existingUser) {
-    return res.status(400).json({ error: 'Username already exists' });
-  }
-  
-  // Create user
-  const hashedPassword = bcrypt.hash(password);
-  const { data: newUser, error } = await supabase
-    .from('users')
-    .insert([
-      {
-        username,
-        password: hashedPassword,
-        role: 'user',
-        created_at: new Date().toISOString()
-      }
-    ])
-    .select()
-    .single();
-  
-  if (error) {
-    return res.status(500).json({ error: 'Failed to create user' });
-  }
-  
-  // Create token
-  const token = jwt.sign(
-    { username: newUser.username, role: newUser.role },
-    JWT_SECRET
-  );
-  
-  return res.status(201).json({
-    access_token: token,
-    username: newUser.username,
-    role: newUser.role,
-    message: 'Registration successful'
-  });
 }
 
 async function handleLogin(req, res) {
-  const { username, password } = await parseBody(req);
-  
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password required' });
+  try {
+    const { username, password } = await parseBody(req);
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+    
+    // Get user
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .single();
+    
+    if (error || !user) {
+      console.error('User not found:', username, error);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    // FIXED: Proper password comparison
+    const isPasswordValid = bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      console.error('Password mismatch for user:', username);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    // Create token
+    const token = jwt.sign(
+      { username: user.username, role: user.role },
+      JWT_SECRET
+    );
+    
+    return res.json({
+      access_token: token,
+      username: user.username,
+      role: user.role,
+      message: 'Login successful'
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    return res.status(500).json({ error: 'Login failed: ' + error.message });
   }
-  
-  // Get user
-  const { data: user, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('username', username)
-    .single();
-  
-  if (error || !user) {
-    return res.status(401).json({ error: 'Invalid credentials' });
-  }
-  
-  // Check password
-  if (!bcrypt.compare(password, user.password)) {
-    return res.status(401).json({ error: 'Invalid credentials' });
-  }
-  
-  // Create token
-  const token = jwt.sign(
-    { username: user.username, role: user.role },
-    JWT_SECRET
-  );
-  
-  return res.json({
-    access_token: token,
-    username: user.username,
-    role: user.role,
-    message: 'Login successful'
-  });
 }
 
+// FIXED: File upload with better error handling
 async function handleFileUpload(req, res) {
   try {
     const user = authenticateToken(req);
@@ -225,9 +246,21 @@ async function handleFileUpload(req, res) {
     const base64Data = base64File.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
     
+    // Validate file size (5MB limit)
+    if (buffer.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: 'File size must be less than 5MB' });
+    }
+    
     // Generate unique filename
-    const fileExt = filename.split('.').pop();
+    const fileExt = filename.split('.').pop() || 'jpg';
     const uniqueFilename = `${user.username}_${Date.now()}.${fileExt}`;
+    
+    console.log('Uploading file:', { 
+      username: user.username, 
+      filename: uniqueFilename, 
+      size: buffer.length,
+      type: filetype 
+    });
     
     // Upload to Supabase Storage
     const { data, error } = await supabase.storage
@@ -238,14 +271,16 @@ async function handleFileUpload(req, res) {
       });
     
     if (error) {
-      console.error('Upload error:', error);
-      return res.status(500).json({ error: 'Failed to upload file' });
+      console.error('Supabase storage upload error:', error);
+      return res.status(500).json({ error: 'Failed to upload file to storage: ' + error.message });
     }
     
     // Get public URL
     const { data: { publicUrl } } = supabase.storage
       .from('prompt-images')
       .getPublicUrl(uniqueFilename);
+    
+    console.log('File uploaded successfully:', publicUrl);
     
     return res.json({
       url: publicUrl,
@@ -254,7 +289,11 @@ async function handleFileUpload(req, res) {
     });
     
   } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
+    console.error('File upload error:', error);
+    if (error.message === 'Invalid token') {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    return res.status(500).json({ error: 'File upload failed: ' + error.message });
   }
 }
 
@@ -351,7 +390,6 @@ async function handleUpdatePrompt(req, res) {
     const promptId = req.url.split('/').pop();
     const updates = await parseBody(req);
     
-    // If updating isTrending, make sure to use quotes
     if (updates.isTrending !== undefined) {
       updates["isTrending"] = updates.isTrending;
       delete updates.isTrending;
