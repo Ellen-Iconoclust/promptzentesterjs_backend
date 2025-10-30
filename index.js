@@ -1,4 +1,3 @@
-
 const { createClient } = require('@supabase/supabase-js');
 
 // Initialize Supabase client
@@ -17,7 +16,7 @@ const corsHeaders = {
 module.exports = async (req, res) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    return res.status(200).json({}, corsHeaders);
+    return res.status(200).set(corsHeaders).end();
   }
 
   // Set CORS headers for all responses
