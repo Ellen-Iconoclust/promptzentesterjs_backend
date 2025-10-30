@@ -1,6 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 
-// Initialize Supabase client
+// Initialize Supabase client - UPDATE THESE WITH YOUR CREDENTIALS
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
@@ -269,8 +269,8 @@ async function handleCreatePrompt(req, res) {
       model,
       text,
       image_url: image_url || null,
-      accepted: user.role === 'admin', // Auto-accept if admin
-      isTrending: false,
+      accepted: user.role === 'admin',
+      "isTrending": false,  // Fixed: added quotes
       created_at: new Date().toISOString()
     };
     
@@ -300,6 +300,12 @@ async function handleUpdatePrompt(req, res) {
     
     const promptId = req.url.split('/').pop();
     const updates = await parseBody(req);
+    
+    // If updating isTrending, make sure to use quotes
+    if (updates.isTrending !== undefined) {
+      updates["isTrending"] = updates.isTrending;
+      delete updates.isTrending;
+    }
     
     const { data: prompt, error } = await supabase
       .from('prompts')
@@ -357,7 +363,7 @@ async function handleAdminStats(req, res) {
     const totalPrompts = prompts?.length || 0;
     const acceptedPrompts = prompts?.filter(p => p.accepted)?.length || 0;
     const pendingPrompts = prompts?.filter(p => !p.accepted)?.length || 0;
-    const trendingPrompts = prompts?.filter(p => p.isTrending && p.accepted)?.length || 0;
+    const trendingPrompts = prompts?.filter(p => p["isTrending"] && p.accepted)?.length || 0; // Fixed
     const totalUsers = new Set(prompts?.map(p => p.username) || []).size;
     
     return res.json({
@@ -380,7 +386,7 @@ async function handlePublicStats(req, res) {
   
   const acceptedPrompts = prompts || [];
   const uniqueUsers = new Set(acceptedPrompts.map(p => p.username));
-  const trendingPrompts = acceptedPrompts.filter(p => p.isTrending);
+  const trendingPrompts = acceptedPrompts.filter(p => p["isTrending"]); // Fixed
   
   return res.json({
     total_prompts: acceptedPrompts.length,
